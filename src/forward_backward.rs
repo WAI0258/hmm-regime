@@ -102,16 +102,17 @@ pub fn forward_backward(
             actual: emission_means.len(),
         });
     }
+    // Allow zero probabilities (log-space can handle log(0) = -inf)
     if let Some((index, &value)) = initial_probs
         .iter()
         .enumerate()
-        .find(|(_, &p)| p <= 0.0 || p > 1.0)
+        .find(|(_, &p)| p < 0.0 || p > 1.0)
     {
         return Err(HmmError::InvalidProbability { index, value });
     }
 
     for (i, row) in transition_matrix.iter().enumerate() {
-        if let Some((col, &value)) = row.iter().enumerate().find(|(_, &p)| p <= 0.0 || p > 1.0) {
+        if let Some((col, &value)) = row.iter().enumerate().find(|(_, &p)| p < 0.0 || p > 1.0) {
             return Err(HmmError::InvalidTransitionProbability { row: i, col, value });
         }
     }

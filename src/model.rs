@@ -29,9 +29,9 @@ impl GaussianHmm {
             return Err(HmmError::InvalidStateCount(0));
         }
 
-        // Validate initial probabilities
+        // Validate initial probabilities (allow zero probabilities, log-space can handle them)
         for (i, &prob) in initial_probs.iter().enumerate() {
-            if prob <= 0.0 {
+            if prob < 0.0 || prob > 1.0 {
                 return Err(HmmError::InvalidProbability {
                     index: i,
                     value: prob,
@@ -58,8 +58,9 @@ impl GaussianHmm {
                     actual: row.len(),
                 });
             }
+            // Allow zero transition probabilities (log-space can handle them)
             for (j, &prob) in row.iter().enumerate() {
-                if prob <= 0.0 {
+                if prob < 0.0 || prob > 1.0 {
                     return Err(HmmError::InvalidTransitionProbability {
                         row: i,
                         col: j,
