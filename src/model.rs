@@ -1,5 +1,5 @@
 use crate::error::HmmError;
-use crate::forward_backward::forward_backward;
+use crate::forward::forward_only;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -199,7 +199,7 @@ impl GaussianHmm {
         }
 
         let observations = vec![observation.to_vec()];
-        let result = forward_backward(
+        let result = forward_only(
             &observations,
             &self.initial_probs,
             &self.transition_matrix,
@@ -221,7 +221,7 @@ impl GaussianHmm {
             }
         }
 
-        forward_backward(
+        forward_only(
             observations,
             &self.initial_probs,
             &self.transition_matrix,

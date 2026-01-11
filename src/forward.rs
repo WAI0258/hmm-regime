@@ -1,12 +1,10 @@
 use crate::error::HmmError;
 use crate::utils;
 
-/// Forward-Backward algorithm for HMM inference (log-space).
+/// Forward-only algorithm for HMM inference (log-space).
 /// 1. **Forward pass**: Compute α_t(i) = log P(o_1, ..., o_t, state_t = i)
-/// 2. **Backward pass**: Compute β_t(i) = log P(o_{t+1}, ..., o_T | state_t = i)
-/// 3. **Gamma**: Compute γ_t(i) = P(state_t = i | observations) using α and β
-#[allow(dead_code)]
-pub fn forward_backward(
+/// 2. **Normalize**: P(state_t | o_1, ..., o_t) = normalize(exp(α_t))
+pub fn forward_only(
     observations: &[Vec<f64>],
     initial_probs: &[f64],
     transition_matrix: &[Vec<f64>],
@@ -28,7 +26,6 @@ pub fn forward_backward(
         });
     }
 
-    // Validate dimensions
     if transition_matrix.len() != n_states {
         return Err(HmmError::DimensionMismatch {
             expected: n_states,
@@ -41,7 +38,7 @@ pub fn forward_backward(
             actual: emission_means.len(),
         });
     }
-    // Allow zero probabilities (log-space can handle log(0) = -inf)
+
     if let Some((index, &value)) = initial_probs
         .iter()
         .enumerate()
@@ -70,18 +67,13 @@ pub fn forward_backward(
         alpha[0][i] = initial_probs[i].ln() + log_emission;
     }
 
-    // Helper function to normalize log probabilities in-place
-    let normalize_log_probs = |probs: &mut [f64]| {
-        let log_sum = utils::log_sum_exp(probs);
-        for prob in probs.iter_mut() {
-            *prob -= log_sum;
-        }
-    };
-
     // Normalize first time step
-    normalize_log_probs(&mut alpha[0]);
+    let log_sum = utils::log_sum_exp(&alpha[0]);
+    for prob in alpha[0].iter_mut() {
+        *prob -= log_sum;
+    }
 
-    // Forward recursion: α_t(i) = log(Σ_j exp(α_{t-1}(j) + log(A_{ji}) + log(P(o_t | state_i))))
+    // Forward recursion: α_t(i) = log(Σ_j exp(α_{t-1}(j) + log(A_{ji}))) + log(P(o_t | state_i))
     for t_idx in 1..t {
         for i in 0..n_states {
             let mut log_sum_terms = Vec::with_capacity(n_states);
@@ -99,59 +91,26 @@ pub fn forward_backward(
             alpha[t_idx][i] = utils::log_sum_exp(&log_sum_terms) + log_emission;
         }
 
-        // Normalize to prevent underflow
-        normalize_log_probs(&mut alpha[t_idx]);
-    }
-
-    // Backward pass: compute beta (log-space)
-    let mut beta = vec![vec![0.0; n_states]; t];
-
-    // Initialize: β_{T-1}(i) = 0 (log(1) = 0)
-    for i in 0..n_states {
-        beta[t - 1][i] = 0.0;
-    }
-
-    // Backward recursion: β_t(i) = log(Σ_j exp(log(A_{ij}) + log(P(o_{t+1} | state_j)) + β_{t+1}(j)))
-    for t_idx in (0..t - 1).rev() {
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..n_states {
-            let mut log_sum_terms = Vec::with_capacity(n_states);
-            for j in 0..n_states {
-                let log_transition = transition_matrix[i][j].ln();
-                let log_emission = utils::multivariate_gaussian_log_pdf_diagonal(
-                    &observations[t_idx + 1],
-                    &emission_means[j],
-                    &emission_variances[j],
-                    j,
-                )?;
-                log_sum_terms.push(log_transition + log_emission + beta[t_idx + 1][j]);
-            }
-            beta[t_idx][i] = utils::log_sum_exp(&log_sum_terms);
+        // Normalize to prevent underflow and convert to probabilities
+        let log_sum = utils::log_sum_exp(&alpha[t_idx]);
+        for prob in alpha[t_idx].iter_mut() {
+            *prob -= log_sum;
         }
-
-        // Normalize to prevent underflow
-        normalize_log_probs(&mut beta[t_idx]);
     }
 
-    // Compute gamma: γ_t(i) = P(state_t = i | observations) = exp(α_t(i) + β_t(i) - log_likelihood)
-    // The log-likelihood is the normalization constant: log P(observations) = log_sum_exp(α_T)
-    let log_likelihood = utils::log_sum_exp(&alpha[t - 1]);
-    let mut gamma = vec![vec![0.0; n_states]; t];
-
+    // Convert from log-space to probability space: P(state_t | o_1, ..., o_t) = exp(α_t)
+    let mut probabilities = vec![vec![0.0; n_states]; t];
     for t_idx in 0..t {
-        let mut log_gamma = Vec::with_capacity(n_states);
-        for i in 0..n_states {
-            log_gamma.push(alpha[t_idx][i] + beta[t_idx][i] - log_likelihood);
-        }
-
-        // Convert from log-space to probability space and normalize
-        let max_log = log_gamma.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        let sum: f64 = log_gamma.iter().map(|&lg| (lg - max_log).exp()).sum();
+        let max_log = alpha[t_idx]
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+        let sum: f64 = alpha[t_idx].iter().map(|&lg| (lg - max_log).exp()).sum();
         #[allow(clippy::needless_range_loop)]
         for i in 0..n_states {
-            gamma[t_idx][i] = (log_gamma[i] - max_log).exp() / sum;
+            probabilities[t_idx][i] = (alpha[t_idx][i] - max_log).exp() / sum;
         }
     }
 
-    Ok(gamma)
+    Ok(probabilities)
 }
